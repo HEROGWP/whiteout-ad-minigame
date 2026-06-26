@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>寒酸啟示錄廣告小遊戲</title>
+<style>
+  :root{ --panel:rgba(12,28,44,.8); --edge:rgba(255,255,255,.12); --money:#41b657; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:#0a121c;font-family:"PingFang TC","Microsoft JhengHei",system-ui,sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none;}
+  #wrap{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;}
+  #stage{position:relative;width:min(100vw,calc(100vh*0.5625));height:min(100vh,calc(100vw/0.5625));background:linear-gradient(#a9d8ea,#dff1f7 55%,#eef8fb);overflow:hidden;box-shadow:0 0 40px rgba(0,0,0,.5);}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  #top{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:6px;padding:8px 10px;pointer-events:none;}
+  #title{font-weight:800;color:#fff;text-shadow:0 2px 6px rgba(0,0,0,.45);font-size:16px;line-height:1;}
+  #title small{display:block;font-size:7px;letter-spacing:2px;opacity:.85;}
+  .res{display:flex;align-items:center;gap:4px;background:var(--panel);border:1px solid var(--edge);border-radius:16px;padding:4px 10px 4px 6px;color:#fff;font-weight:800;font-size:14px;}
+  .dot{width:14px;height:14px;border-radius:4px;box-shadow:inset 0 -2px 0 rgba(0,0,0,.25);}
+  #bag{position:absolute;top:42px;left:10px;display:flex;gap:5px;flex-wrap:wrap;max-width:70%;}
+  .bagItem{display:flex;align-items:center;gap:3px;background:rgba(12,28,44,.6);border-radius:10px;padding:3px 7px;color:#fff;font-weight:700;font-size:11px;}
+  #close{position:absolute;top:8px;right:10px;width:28px;height:28px;border-radius:50%;background:var(--panel);border:1px solid var(--edge);color:#fff;font-size:15px;display:flex;align-items:center;justify-content:center;pointer-events:auto;}
+  #reset{position:absolute;top:8px;right:44px;height:28px;padding:0 11px;border-radius:14px;background:var(--panel);border:1px solid var(--edge);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;gap:3px;pointer-events:auto;cursor:pointer;}
+  #reset:active{transform:scale(.94);}
+  #cta{position:absolute;top:74px;left:10px;z-index:5;background:linear-gradient(#5ed46a,#2f9d43);color:#fff;font-weight:800;font-size:14px;border:2px solid #fff;border-radius:11px;padding:7px 14px;box-shadow:0 4px 0 #1f6e2e;animation:pulse 1.2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+  #hint{position:absolute;left:50%;top:15%;transform:translateX(-50%);color:#0b3a52;font-weight:800;font-size:14px;background:rgba(255,255,255,.72);padding:6px 14px;border-radius:18px;pointer-events:none;animation:fl 1.1s ease-in-out infinite;}
+  @keyframes fl{0%,100%{transform:translateX(-50%)}50%{transform:translateX(-50%) translateY(-6px)}}
+  #toast{position:absolute;left:50%;top:24%;transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;padding:9px 16px;border-radius:11px;font-weight:700;opacity:0;transition:opacity .3s;pointer-events:none;font-size:13px;max-width:80%;text-align:center;}
+</style>
+</head>
+<body>
+<div id="wrap"><div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="top"><div id="title">寒酸啟示錄<small>BROKEOUT SURVIVAL</small></div>
+    <div class="res"><span class="dot" style="background:var(--money)"></span><span id="money">0</span></div></div>
+  <div id="bag"></div>
+  <div id="reset">↺ 重置</div>
+  <div id="close">✕</div>
+  <div id="cta">立即遊玩 ▶</div>
+  <div id="hint">拖曳移動主角 🕹</div>
+  <div id="toast"></div>
+</div></div>
+<script>
+(()=>{
+"use strict";
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d'), stage=document.getElementById('stage');
+let W=540,H=960,DPR=1;
+function resize(){ const r=stage.getBoundingClientRect(); W=Math.round(r.width); H=Math.round(r.height); DPR=Math.min(devicePixelRatio||1,2); cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); if(!S.__spread && W>=200){ S.__spread=true; spreadStations(); } }
+addEventListener('resize',resize);
+
+const TILE_W=44, TILE_H=30, GRID=14;
+const oX=()=>W/2, oY=()=>Math.max(H*0.12, H*0.5-(GRID-1)*TILE_H/2);
+function iso(c,r){ return { x:oX()+(c-r)*TILE_W/2, y:oY()+(c+r)*TILE_H/2 }; }
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+
+const RES={ wood:{name:'木材',color:'#b07a44'}, cattle:{name:'生牛',color:'#e9eef1'}, beef:{name:'牛肉',color:'#e0413a'}, ration:{name:'口糧',color:'#f0a030'} };
+const PRODUCTS=['beef','ration']; const PRICE={ beef:12, ration:26 };
+
+const S={
+  money:0,
+  player:{pc:6,pr:6, bag:{wood:0,cattle:0,beef:0,ration:0}, gt:0, ft:0, bob:0},
+  carryCap:12, gatherInt:0.45, moveSpeed:4, pMoveSpeed:4, pGatherInt:0.45, pPlaceInt:0.09, procInt:1.2, spawnInt:1.0, serveInt:0.2, priceMul:1,
+  joy:{active:false,ox:0,oy:0,dx:0,dy:0},
+  workers:[], cows:[], cubes:[],
+  stations:[
+    {id:'home',   type:'home', c:6,r:6, locked:false},
+    {id:'tree1',  type:'source', yield:'wood', c:4,r:5, locked:false},
+    {id:'tree2',  type:'source', yield:'wood', c:3,r:3, locked:true},
+    {id:'butcher',type:'proc', ins:{cattle:1}, out:'beef',   inbuf:{cattle:0}, outbuf:0, pt:0, cap:10, procMul:0.30, c:5,r:1.5, locked:true},
+    {id:'baker',  type:'proc', ins:{wood:1,beef:1}, out:'ration', inbuf:{wood:0,beef:0}, outbuf:0, pt:0, cap:10, procMul:0.40, c:8.5,r:5, locked:true},
+    {id:'counter',type:'counter', c:7,r:11, stock:{beef:0,ration:0}, queue:[], queueMax:6, spawnT:0, serveT:0, cash:0, locked:true},
+    {id:'woodmarket', type:'market', accept:'wood', price:6, c:1.5,r:8.5, locked:true},
+    // 建造框鏈：依序解鎖、門檻較高（一次只出現一個當前目標）
+    {id:'frame1', type:'frame', need:{wood:8},   got:{wood:0},   c:6,r:8,  unlocks:['butcher','woodmarket','frame2'], spawnCows:3, locked:false},
+    {id:'frame2', type:'frame', need:{beef:6},   got:{beef:0},   c:7,r:3.5,  unlocks:['counter','up_player','up_lumber','frame3'], locked:true},
+    {id:'frame3', type:'frame', need:{wood:18},  got:{wood:0},   c:3.5,r:10.5, unlocks:['baker','up_rancher','up_clerk','up_clerk2','frame4'], locked:true},
+    {id:'frame4', type:'frame', need:{ration:6}, got:{ration:0}, c:9,r:9,unlocks:['tree2','up_proc','up_spawn'], locked:true},
+    // 升級台：依序解鎖、價格較高；散開分佈避免標籤重疊
+    {id:'up_player', type:'upgrade', stat:'player',  label:'主角+', cost:90, acc:0, growth:1.25, c:1.5,r:4.5,  locked:true},
+    {id:'up_lumber', type:'upgrade', stat:'lumber',  label:'伐木工', cost:120, acc:0, growth:1.28, c:3.5,r:7,  locked:true},
+    {id:'up_rancher',type:'upgrade', stat:'rancher', label:'牧場工', cost:200, acc:0, growth:1.3,  c:8.5,r:1.5, locked:true},
+    {id:'up_proc',   type:'upgrade', stat:'proc',    label:'加工速', cost:320, acc:0, growth:1.28, c:10.5,r:3.5, locked:true},
+    {id:'up_clerk',  type:'upgrade', stat:'clerkB',  label:'肉店員', cost:360, acc:0, growth:1.32, c:11,r:7, locked:true},
+    {id:'up_clerk2', type:'upgrade', stat:'clerkR',  label:'糧店員', cost:360, acc:0, growth:1.32, c:11,r:9, locked:true},
+    {id:'up_spawn',  type:'upgrade', stat:'spawn',   label:'招客',   cost:150, acc:0, growth:1.25, c:9,r:12, locked:true},
+  ],
+  snow:[], floats:[], started:false, time:0, obj:null,
+};
+for(let i=0;i<55;i++) S.snow.push({x:Math.random(),y:Math.random(),s:.4+Math.random()*.9});
+function spawnCow(hx,hy){ S.cows.push({hx,hy,pc:hx,pr:hy,vx:(Math.random()-.5)*.6,vy:(Math.random()-.5)*.6,t:Math.random()*2,cd:0}); }
+function scatterCows(n){ for(let i=0;i<n;i++) spawnCow(1.5+Math.random()*(GRID-3),1.5+Math.random()*(GRID-3)); } // 牛分散在地圖各處
+function reconcileCows(){ const bu=st('butcher'); if(!bu||bu.locked) return; const target=Math.min(40, 3+Math.floor((upLvl('up_rancher')-1)/3)); while(S.cows.length<target) spawnCow(1.5+Math.random()*(GRID-3),1.5+Math.random()*(GRID-3)); } // 牛數隨牧場工等級補到 target(frame1 完成才生、上限 40)：Lv1 3、Lv30 12、Lv100 36
+// 開局不放牛；完成第一個建造（解鎖屠宰台）才散布出現
+function st(id){ return S.stations.find(s=>s.id===id); }
+// ===== 升級系統：只存「等級 lvl」，所有會因等級變動的數值都由等級用公式換算 =====
+// 要調平衡：改下面 recomputeStats 裡的公式即可（存檔只記等級，套用新公式自動重算）。
+for(const s of S.stations) if(s.type==='upgrade'){ s.base=s.cost; s.lvl=1; }   // base=起始成本；等級從 1 起算(Lv.1=未升級)
+function upLvl(id){ const s=st(id); return s?(s.lvl||1):1; }
+function syncWorkers(role,n){ let cur=0; for(const w of S.workers) if(w.role===role) cur++;
+  for(let i=cur;i<n;i++) S.workers.push({role,pc:6,pr:6,carry:{res:'wood',amt:0},state:'load',t:0,bob:0,ang:Math.random()*6.28}); }
+function recomputeStats(){ // 公式用「等級-1」(Lv.1=未升級=0 級加成)
+  const lp=upLvl('up_player')-1, lpr=upLvl('up_proc')-1, lsp=upLvl('up_spawn')-1, lr=upLvl('up_rancher')-1;
+  // —— 主角力(up_player)＝容量類 ——
+  S.carryCap  = 12 + 2*lp;
+  // —— 加工速(up_proc)＝速度類：採集/移動/生產都吃這個等級 ——
+  S.moveSpeed = Math.min(8, 4 + 0.4*lpr);                  // 加工速每級 +0.4(加大)
+  S.gatherInt = Math.max(0.18, 0.45 * Math.pow(0.80, lpr)); // 採集 ×1.25/級(與生產同步)
+  // —— 主角專屬：移速/採集 隨主角+(lp) 額外提升，不影響工人 ——
+  S.pMoveSpeed = Math.min(12, S.moveSpeed * (1 + 0.10*lp));  // 主角移速：在加工速基礎上再隨主角+ +10%/級
+  S.pGatherInt = Math.max(0.06, S.gatherInt * Math.pow(0.85, lp)); // 主角採集：隨主角+ 每級再快(×0.85)
+  S.pPlaceInt  = Math.max(0.017, 0.09 * Math.pow(0.80, lpr) * Math.pow(0.85, lp)); // 主角放置(投料/交貨/賣/充能)：跟採集同曲線隨加工速+主角+加快；Lv1 0.09→上限≈0.017(≈60/s 每幀上限)
+  S.procInt   = Math.max(0.004, 1.2 * Math.pow(0.80, lpr)); // 生產隨加工速等級加快；base 1.2 慢起步、floor 0.004(約Lv26觸頂)讓後期產出跟得上多工人的搬運(beef≈1.85→555/s)
+  // —— 招客(up_spawn) ——
+  // 來客速：取「原需求公式」與「供給上限」較慢者→需求永遠≤供給(牧場工×3)、佇列不堆；低等級原公式較慢故不變(已平衡)
+  S.spawnInt  = Math.max( 0.30 * S.procInt * (1 + lsp/2),  (1 + lsp/2) / (Math.max(1, lr) * 3.0) );
+  S.serveInt  = 0.1  * S.procInt;                            // 賣東西速率(調快 0.2→0.1)：批量結帳更快
+  S.priceMul  = Math.pow(1.2, lsp);                          // 招客每級售價更高(加大)
+  S.maxQty    = 1 + lsp;                                      // 每位客人需求量 1~maxQty，maxQty 隨招客等級遞增
+  // —— 站點衍生 ——
+  for(const s of S.stations){
+    if(s.type==='proc') s.cap = 10 + 2*lp;                 // 屠宰台/烤爐緩衝
+    else if(s.type==='counter') s.queueMax = 6 + lp;       // 排隊上限
+    else if(s.type==='market') s.price = 6 + 2*lp;         // 賣木材單價
+    else if(s.type==='upgrade') s.cost = Math.round(s.base * Math.pow(s.growth, (s.lvl||1)-1)); // 下一級成本
+  }
+  // —— 招工(up_lumber/rancher/clerk)：工人數＝等級-1(Lv.1=0 人) ——
+  syncWorkers('lumber',  upLvl('up_lumber')-1);
+  syncWorkers('rancher', upLvl('up_rancher')-1);
+  syncWorkers('clerkB',  upLvl('up_clerk')-1);    // 肉店員(搬牛肉)，up_clerk 升級
+  syncWorkers('clerkR',  upLvl('up_clerk2')-1);   // 糧店員(搬口糧)，up_clerk2 升級
+  reconcileCows();                                // 牛數隨牧場工等級補足(frame1 後)
+}
+recomputeStats();
+// 自動排開：用每個站點「標籤矩形」做 AABB 最小平移分離，保證標籤不重疊（一勞永逸，不再手動喬位置）。
+// 釘住開局三件（營火/樹/建造框）讓緊湊開局不被推動，其餘站點繞著它們排開。
+// BOX[type]=[半寬, 上緣高(label/數字最高處), 下緣高(名稱/進度條最低處)]，皆為螢幕像素。
+function spreadStations(){ const HW=TILE_W/2, HH=TILE_H/2;
+  const BOX={home:[16,16,20],source:[18,14,20],proc:[30,38,30],counter:[27,34,30],market:[27,32,18],frame:[23,48,24],upgrade:[27,24,20]};
+  const PIN={home:1,tree1:1,frame1:1};
+  // 約束：標籤框不准超出畫面 → 限制 c-r（水平）與 c+r（垂直上緣，避開頂部橫幅）。依實際 W、oY 計算。
+  const maxCR=(W/2-31)/HW, minSum=(175-oY()+48)/HH;
+  const sp=s=>({x:(s.c-s.r)*HW, y:(s.c+s.r)*HH});
+  const mv=(s,sx,sy)=>{ s.c=clamp(s.c+(sx/HW+sy/HH)/2,0.7,GRID-1.7); s.r=clamp(s.r+(sy/HH-sx/HW)/2,0.7,GRID-1.7);
+    let d=s.c-s.r; const dc=clamp(d,-maxCR,maxCR); if(d!==dc){ const sh=(d-dc)/2; s.c-=sh; s.r+=sh; }
+    const sm=s.c+s.r; if(sm<minSum){ const ad=(minSum-sm)/2; s.c+=ad; s.r+=ad; } };
+  for(let it=0; it<200; it++){ let moved=false;
+    for(let i=0;i<S.stations.length;i++) for(let j=i+1;j<S.stations.length;j++){
+      const a=S.stations[i], b=S.stations[j], aMov=!PIN[a.id], bMov=!PIN[b.id];
+      if(!aMov && !bMov) continue;
+      const A=BOX[a.type]||[22,22,22], B=BOX[b.type]||[22,22,22], pa=sp(a), pb=sp(b);
+      const ox=(A[0]+B[0]) - Math.abs(pb.x-pa.x);
+      const oy=Math.min(pa.y+A[2], pb.y+B[2]) - Math.max(pa.y-A[1], pb.y-B[1]);
+      if(ox>0 && oy>0){ moved=true;
+        if(ox<=oy){ const push=ox+0.6, s=pb.x>=pa.x?1:-1;
+          if(aMov&&bMov){ mv(a,-s*push/2,0); mv(b,s*push/2,0); } else if(bMov){ mv(b,s*push,0); } else { mv(a,-s*push,0); } }
+        else { const push=oy+0.6, s=pb.y>=pa.y?1:-1;
+          if(aMov&&bMov){ mv(a,0,-s*push/2); mv(b,0,s*push/2); } else if(bMov){ mv(b,0,s*push); } else { mv(a,0,-s*push); } }
+      }
+    }
+    if(!moved) break;
+  }
+}
+function frameDone(s){ for(const k in s.need) if(s.got[k]<s.need[k]) return false; return true; }
+function objective(){ // 目前該做什麼（依進度動態）
+  const fr=S.stations.find(s=>s.type==='frame'&&!s.locked&&!frameDone(s));
+  if(fr){ const r=Object.keys(fr.need)[0], have=S.player.bag[r]||0, remain=fr.need[r]-fr.got[r];
+    // 採夠了（背滿、或已足夠補完這個框）才去交付，避免採一個就跑一趟、箭頭來回跳
+    if(have>0 && (have>=remain || have>=S.carryCap)) return {t:fr, msg:'搬'+RES[r].name+'到 🔨建造框  '+fr.got[r]+'/'+fr.need[r]};
+    if(r==='wood')   return {t:st('tree1'), msg:'去砍木材 🌲（走到樹旁）'};
+    if(r==='beef'){ const b=st('butcher');
+      if(b&&b.outbuf>0) return {t:b, msg:'到 🔪屠宰台 取做好的牛肉'};
+      if((S.player.bag.cattle||0)>0||(b&&b.inbuf.cattle>0)) return {t:b, msg:'把生牛丟進 🔪屠宰台 變牛肉'};
+      let nc=null,nd=99; for(const k of S.cows){ const d=Math.hypot(S.player.pc-k.pc,S.player.pr-k.pr); if(d<nd){nd=d;nc=k;} } return {t:nc?{c:nc.pc,r:nc.pr}:null, msg:'去宰牛 🐄（走到牛旁）取生牛'}; }
+    if(r==='ration'){ const bk=st('baker'), B=S.player.bag;
+      if(bk&&bk.outbuf>0) return {t:bk, msg:'到 🍞烤爐 取口糧'};
+      if((B.wood||0)>0 && (B.beef||0)>0) return {t:bk, msg:'把木材+牛肉投進 🍞烤爐 做口糧'};
+      if((B.beef||0)===0){ const b=st('butcher');
+        if(b&&b.outbuf>0) return {t:b, msg:'到 🔪屠宰台 取牛肉（做口糧用）'};
+        if((B.cattle||0)>0) return {t:b, msg:'把生牛丟進 🔪屠宰台（做口糧用）'};
+        if(b&&b.inbuf.cattle>0) return {t:b, msg:'🔪屠宰台 處理中…等牛肉做好'};
+        let nc=null,nd=99; for(const k of S.cows){ const d=Math.hypot(S.player.pc-k.pc,S.player.pr-k.pr); if(d<nd){nd=d;nc=k;} } if(nc) return {t:{c:nc.pc,r:nc.pr}, msg:'去宰牛 🐄 取生牛（做口糧用）'}; }
+      if((B.wood||0)===0) return {t:st('tree1'), msg:'去砍木材 🌲（做口糧用）'};
+      return {t:bk, msg:'把木材+牛肉投進 🍞烤爐 做口糧'}; }
+    return {t:fr, msg:'交付到建造框'};
+  }
+  const co=st('counter');
+  if(co&&!co.locked){
+    if((S.player.bag.beef||0)>0||(S.player.bag.ration||0)>0) return {t:co, msg:'把成品搬到 🛒販售櫃台 賣錢 💰'};
+    if(co.cash>0) return {t:co, msg:'去 🛒販售櫃台 收錢 💰'};
+    const b=st('butcher');
+    if(b&&!b.locked){ if(b.outbuf>0) return {t:b, msg:'到 🔪屠宰台 取牛肉拿去賣 💰'};
+      if((S.player.bag.cattle||0)>0||b.inbuf.cattle>0) return {t:b, msg:'把生牛丟進 🔪屠宰台 變牛肉'};
+      let nc=null,nd=99; for(const k of S.cows){ const d=Math.hypot(S.player.pc-k.pc,S.player.pr-k.pr); if(d<nd){nd=d;nc=k;} } if(nc) return {t:{c:nc.pc,r:nc.pr}, msg:'去宰牛 🐄 取生牛賣錢 💰'}; }
+  }
+  return null;
+}
+
+const NUM_SUFFIX=['','K','M','B','T','Qa','Qi','Sx','Sp','Oc','No','Dc','Ud','Dd','Td','Qd','Qq','Sd','St','Og','Nv']; // 千進位階級，可一直延伸
+function fmt(n){ n=Math.floor(n); if(n<1000) return ''+n;
+  let t=0; while(n>=1000 && t<NUM_SUFFIX.length-1){ n/=1000; t++; }
+  let d = n<10?2 : n<100?1 : 0;                                   // 個位數2位小數、十位數1位、百位數0位
+  if(+n.toFixed(d)>=1000 && t<NUM_SUFFIX.length-1){ n/=1000; t++; d=2; } // 進位邊界(999.99K→1.00M)
+  return n.toFixed(d)+NUM_SUFFIX[t]; }
+function bagTotal(a){ let s=0; for(const k in a.bag) s+=a.bag[k]; return s; }
+function near(a,s){ return Math.hypot(a.pc-s.c,a.pr-s.r)<=1.4; }
+function floatRes(p,kind,txt){ if(S.floats.length>=30) S.floats.shift(); S.floats.push({x:p.x,y:p.y-26,vy:-30,life:.7,text:txt||'+1',color:RES[kind]?RES[kind].color:'#fff'}); }
+function floatTxt(c,r,txt,color,big){ if(S.floats.length>=30) S.floats.shift(); const p=iso(c,r); S.floats.push({x:p.x,y:p.y-26,vy:-38,life:1.1,text:txt,color:color||'#fff',big:big}); } // 浮字上限 30(丟最舊)避免 Lv100 滿天
+function flyCube(fx,fy,tx,ty,color){ if(S.cubes.length>=40) S.cubes.shift(); S.cubes.push({x:fx,y:fy,tx,ty,t:0,sp:2.2+Math.random()*0.7,color}); } // 飛行方塊上限 40
+function bagStack(bag){ const o=[]; for(const k of ['wood','cattle','beef','ration']) for(let i=0;i<bag[k];i++) o.push(RES[k].color); return o; }
+function carryStack(c){ const o=[]; for(let i=0;i<(c?c.amt:0);i++) o.push(RES[c.res].color); return o; }
+function depCube(a,s,color){ const ap=iso(a.pc,a.pr),sp=iso(s.c,s.r); flyCube(ap.x,ap.y-44,sp.x,sp.y-8,color); }
+function pickCube(a,s,color){ const ap=iso(a.pc,a.pr),sp=iso(s.c,s.r); flyCube(sp.x,sp.y-8,ap.x,ap.y-44,color); }
+
+
+const FLOW=0.09;
+function wcap(){ const lp=upLvl('up_player')-1; return lp<=29 ? S.carryCap : Math.min(S.carryCap, 70); } // 工人搬運軟上限：Lv≤30 與主角同(carryCap)、Lv31+ 封頂 70 避免高等級囤貨不卸→鏈停擺
+function cap(a){ return a===S.player ? S.carryCap : wcap(); } // 主角=carryCap(滿)、工人=wcap(軟上限)
+function interact(a,s){
+  if(s.locked) return;
+  if(s.type==='source'){ if((a.bag[s.yield]||0)>=cap(a))return; a.gt+=tickDt; if(a.gt>=S.pGatherInt){ a.gt-=S.pGatherInt; a.bag[s.yield]++; const sp=iso(s.c,s.r),ap=iso(a.pc,a.pr); flyCube(sp.x,sp.y-18,ap.x,ap.y-46,RES[s.yield].color); a.bob=1; } return; }
+  a.ft=(a.ft||0)+tickDt; if(a.ft<(S.pPlaceInt||FLOW)) return; a.ft-=(S.pPlaceInt||FLOW); // 放置間隔隨等級加快(pPlaceInt)
+  if(s.type==='upgrade'){ if(S.money<=0) return; const step=Math.min(S.money,Math.max(1,Math.ceil(s.cost/18))); S.money-=step; s.acc+=step; depCube(a,s,'#f3c34a');
+    if(s.acc>=s.cost){ s.acc-=s.cost; s.lvl=(s.lvl||0)+1; recomputeStats(); floatTxt(s.c,s.r,'升級!','#f3c34a',true); if(['lumber','rancher','clerkB','clerkR'].includes(s.stat)) toast('招募 '+({lumber:'伐木工',rancher:'牧場工',clerkB:'肉店員',clerkR:'糧店員'}[s.stat])+'！'); } }
+  else if(s.type==='proc'){ for(const r in s.ins){ if(a.bag[r]>0){ a.bag[r]--; s.inbuf[r]++; depCube(a,s,RES[r].color); return; } } if(s.outbuf>0 && (a.bag[s.out]||0)<cap(a)){ s.outbuf--; a.bag[s.out]++; pickCube(a,s,RES[s.out].color); return; } } /* 輸入庫存無限堆疊，產出(outbuf)由 updateProc 的 cap 限制 */
+  else if(s.type==='counter'){ for(const p of PRODUCTS){ if(a.bag[p]>0){ a.bag[p]--; s.stock[p]++; depCube(a,s,RES[p].color); return; } } if(s.cash>0){ S.money+=s.cash; floatTxt(s.c,s.r,'+'+fmt(s.cash),'#41b657',true); s.cash=0; return; } }
+  else if(s.type==='market'){ if(a.bag[s.accept]>0){ a.bag[s.accept]--; S.money+=s.price; floatTxt(s.c,s.r,'+$'+s.price,'#41b657'); depCube(a,s,RES[s.accept].color); } }
+  else if(s.type==='frame'){ for(const r in s.need){ if(a.bag[r]>0 && s.got[r]<s.need[r]){ a.bag[r]--; s.got[r]++; depCube(a,s,RES[r].color);
+    let done=true; for(const k in s.need) if(s.got[k]<s.need[k]) done=false;
+    if(done){ for(const id of s.unlocks){ const u=st(id); if(u)u.locked=false; } if(s.spawnCows) scatterCows(s.spawnCows); s.locked=true; floatTxt(s.c,s.r,'解鎖！','#f3c34a',true); toast('解鎖新地塊！'); }
+    return; } } }
+}
+// 宰牛取肉（牛分散在地圖、會動）：靠近且冷卻結束 → 取得生牛
+function harvestCows(a,dt){ if((a.bag.cattle||0)>=cap(a)){ a.ct=0; return; }
+  let near=false; for(const k of S.cows){ if(Math.hypot(a.pc-k.pc,a.pr-k.pr)<=1.0){near=true;break;} }
+  if(!near){ a.ct=0; return; }                                  // 不在牛旁→重置採集計時
+  a.ct=(a.ct||0)+dt; if(a.ct<S.pGatherInt) return; a.ct-=S.pGatherInt;  // 靠近就採、無牛冷卻；主角採集速率(隨主角+)
+  for(const k of S.cows){ if((a.bag.cattle||0)>=cap(a)) break; if(Math.hypot(a.pc-k.pc,a.pr-k.pr)<=1.0){ a.bag.cattle=(a.bag.cattle||0)+1; const cp=iso(k.pc,k.pr),ap=iso(a.pc,a.pr); flyCube(cp.x,cp.y-12,ap.x,ap.y-46,RES.cattle.color); a.bob=1; } } }
+
+function updateProc(s,dt){ if(s.locked) return; const pi=S.procInt*(s.procMul||1);
+  let has=true; for(const r in s.ins) if(s.inbuf[r]<s.ins[r]){ has=false; break; }
+  if(!has){ if(s.pt>pi) s.pt=pi; return; }              // 缺料：不囤積進度(避免補料後爆量)
+  s.pt+=dt; let guard=0;
+  while(s.pt>=pi && s.outbuf<s.cap && guard<999){       // 批量：高加工速一個 tick 可產多個(突破 60/s 天花板)
+    let ok=true; for(const r in s.ins) if(s.inbuf[r]<s.ins[r]){ ok=false; break; } if(!ok) break;
+    s.pt-=pi; for(const r in s.ins) s.inbuf[r]-=s.ins[r]; s.outbuf++; guard++;
+  }
+  if(s.pt>pi) s.pt=pi;                                  // 進度上限一輪
+}
+function updateCounter(c,dt){ if(c.locked) return;
+  // 回授：櫃台庫存積壓(供>需)→自動加快來客去消化；各等級自我校正(補供給率估不準的部分)
+  const backlog=c.stock.beef+c.stock.ration, boost=1+Math.min(8, backlog/Math.max(1,S.maxQty)); // 每 ~maxQty 單位積壓 +1×、上限 9×
+  const si=(S.spawnInt||1)/boost; c.spawnT+=dt; let g=0;
+  while(c.spawnT>=si && g<200){ c.spawnT-=si; if(c.queue.length<800){ const canR=!st('baker').locked;
+      const B=c.stock.beef, R=c.stock.ration; let want;                       // 想買什麼＝依櫃台庫存加權(庫存多那邊客人多→需求跟著供給)
+      if(!canR) want='beef';                                                   // 烤爐未解鎖只買牛肉
+      else if(B+R<=0) want = Math.random()<0.4 ? 'ration' : 'beef';            // 無庫存→預設 60/40
+      else want = Math.random() < B/(B+R) ? 'beef' : 'ration';                 // P(牛肉)=牛肉庫存占比
+      c.queue.push({want, qty:1+Math.floor(Math.random()*(S.maxQty||1))}); } g++; } // 批量生客、800 軟上限防爆
+  if(c.spawnT>si) c.spawnT=si;
+  const sv=S.serveInt||0.6; c.serveT+=dt; g=0; let earned=0;
+  while(c.serveT>=sv && c.queue.length && g<999){ c.serveT-=sv; const idx=c.queue.findIndex(q=>c.stock[q.want]>0); if(idx<0) break; const f=c.queue[idx]; const n=Math.min(f.qty, c.stock[f.want]); c.stock[f.want]-=n; const pr=Math.round(PRICE[f.want]*(S.priceMul||1)); c.cash+=pr*n; earned+=pr*n; f.qty-=n; if(f.qty<=0) c.queue.splice(idx,1); g++; } // 結帳：一次賣客人頭上的數量(扣庫存)、收益=單價×數量；庫存不足則部分成交、留隊待補
+  if(earned>0) c._eAcc=(c._eAcc||0)+earned;                 // 累積銷售額
+  c._eT=(c._eT||0)+dt; if(c._eT>=0.5){ if(c._eAcc>0){ floatTxt(c.c,c.r,'+$'+fmt(c._eAcc),'#f3c34a'); c._eAcc=0; } c._eT=0; } // 每 0.5s 才噴一個合計浮字(避免高速賣出時浮字疊滿擋畫面)
+  if(c.serveT>sv) c.serveT=sv; }
+function updateCows(dt){ for(const k of S.cows){
+  // 有採集者(玩家/牧場工)在旁(≤1.1)就站著不動，讓人像砍樹一樣站著連續採、不用追
+  let nearH = Math.hypot(S.player.pc-k.pc,S.player.pr-k.pr)<=1.1;
+  if(!nearH) for(const w of S.workers){ if(w.role==='rancher' && Math.hypot(w.pc-k.pc,w.pr-k.pr)<=1.1){ nearH=true; break; } }
+  if(nearH) continue;
+  k.t-=dt; if(k.t<=0){ k.vx=(Math.random()-.5)*.6; k.vy=(Math.random()-.5)*.6; k.t=1+Math.random()*2; }
+  k.pc+=k.vx*dt; k.pr+=k.vy*dt; const dx=k.pc-k.hx,dy=k.pr-k.hy,d=Math.hypot(dx,dy); if(d>1.7){ k.pc=k.hx+dx/d*1.7; k.pr=k.hy+dy/d*1.7; k.vx*=-1;k.vy*=-1; }
+  k.pc=clamp(k.pc,0.5,GRID-1.5); k.pr=clamp(k.pr,0.5,GRID-1.5); } }
+
+// 工人移動
+function moveXY(w,tx,ty,off){ const ox=tx+(off?Math.cos(w.ang)*off:0), oy=ty+(off?Math.sin(w.ang)*off:0); const dx=ox-w.pc,dy=oy-w.pr,d=Math.hypot(dx,dy); if(d>0.1){ const step=Math.min(d,S.moveSpeed*0.7*tickDt); w.pc+=dx/d*step; w.pr+=dy/d*step; return false; } return true; }
+function pickDest(res){ // 依需求挑目的地：建造框優先 → 缺料導向 → 才拿去賣
+  const fr=S.stations.find(s=>s.type==='frame'&&!s.locked&&s.need[res]); if(fr) return fr;
+  const bk=st('baker'), co=st('counter');
+  if(res==='beef'){ // 牛肉：往庫存較少的那邊送(平衡)；兩邊都缺(都快空<2)先送烤爐(作糧)
+    const bOk=bk&&!bk.locked, cOk=co&&!co.locked;
+    if(bOk&&cOk&&co.queue.length){ const front=co.queue.slice(0,4); // 排頭(最多4位)都買糧、沒人要牛肉 → 牛肉全送烤爐作糧
+      if(front.every(q=>q.want==='ration')) return bk; }
+    if(bOk&&cOk){ const bb=bk.inbuf.beef, cb=co.stock.beef;
+      if(bb<2 && cb<2) return bk;     // 兩邊都缺 → 烤爐
+      return bb<=cb ? bk : co;        // 否則往庫存少的那邊(同少時偏烤爐)
+    }
+    if(cOk) return co; if(bOk) return bk; return null;
+  }
+  // 木材：烤爐填到滿、其餘賣木材站；口糧：只往櫃台
+  if(bk&&!bk.locked&&bk.inbuf[res]!==undefined && bk.inbuf[res]<bk.cap) return bk;
+  if(res==='wood'){ const wm=st('woodmarket'); if(wm&&!wm.locked) return wm; }
+  if(PRODUCTS.includes(res)){ if(co&&!co.locked) return co; }
+  return null;
+}
+// 當下所有有效的木材去向（建造框需料 → 烤爐生產 → 賣木材換錢）；伐木工依索引輪流分配到不同去向、避免一群人擠同一處
+function woodDests(){ const d=[];
+  for(const s of S.stations){ if(s.type==='frame'&&!s.locked&&s.need.wood&&s.got.wood<s.need.wood) d.push(s); }
+  const bk=st('baker'); const bakerNeedsWood = bk&&!bk.locked&&bk.inbuf.wood<bk.inbuf.beef; // 木頭庫存 < 牛肉庫存＝木頭是做糧瓶頸 → 要補木頭
+  if(bakerNeedsWood) d.push(bk);
+  const wm=st('woodmarket'); if(wm&&!wm.locked && !bakerNeedsWood) d.push(wm); // 木頭<牛肉時不賣、全送烤爐(及建造框)；木頭≥牛肉(已夠配)才賣多餘
+  return d;
+}
+function roleIndex(w){ let i=0; for(const x of S.workers){ if(x===w) return i; if(x.role===w.role) i++; } return 0; }
+function doUnload(w,u){ const r=w.carry.res;
+  if(u.type==='frame'){ if(u.got[r]<u.need[r]){ u.got[r]++; w.carry.amt--; if(u.got[r]>=u.need[r]){ for(const id of u.unlocks){const x=st(id);if(x)x.locked=false;} if(u.spawnCows)scatterCows(u.spawnCows); u.locked=true; toast('工人解鎖了新地塊！'); } } /* 滿了不收、不丟棄；剩下的由 updateWorker 改送別處 */ }
+  else if(u.type==='proc'){ if(u.inbuf[r]!==undefined){u.inbuf[r]++;w.carry.amt--;} else w.carry.amt=0; } /* 輸入庫存無限堆疊，不再因滿而丟棄 */
+  else if(u.type==='market'){ S.money+=u.price; w.carry.amt--; }
+  else if(u.type==='counter'){ if(PRODUCTS.includes(r)){u.stock[r]++;w.carry.amt--;} if(u.cash>0){S.money+=u.cash;u.cash=0;} }
+  else w.carry.amt--; }
+function updateWorker(w){
+  if(w.role==='rancher'){
+    if(w.state==='load'){
+      // 鎖定一隻目標牛、採滿一車前不換；挑「被最少牧場工盯著」的牛(同票取最近)→自動分散，且不會因牛移動每幀改主意而抖動
+      if(!w._cow || S.cows.indexOf(w._cow)<0){ let best=null,bs=1e9; for(const k of S.cows){ const tg=S.workers.reduce((n,x)=>n+(x.role==='rancher'&&x._cow===k?1:0),0); const sc=tg*100+Math.hypot(w.pc-k.pc,w.pr-k.pr); if(sc<bs){bs=sc;best=k;} } w._cow=best; }
+      const cow=w._cow;
+      if(cow){ const dcow=Math.hypot(w.pc-cow.pc,w.pr-cow.pr); if(dcow>0.9) moveXY(w,cow.pc,cow.pr,0); } /* 移向目標牛、進範圍(0.9)就停 */
+      // 靠近就採(無牛冷卻)、速率＝採集速度；每輪把範圍內(≤1.0)所有牛一起採
+      w.t+=tickDt; if(w.t>=S.gatherInt){ w.t-=S.gatherInt; for(const k of S.cows){ if(w.carry.amt>=wcap()) break; if(Math.hypot(w.pc-k.pc,w.pr-k.pr)<=1.0){ w.carry.res='cattle'; w.carry.amt++; const cp=iso(k.pc,k.pr),wp=iso(w.pc,w.pr); flyCube(cp.x,cp.y-12,wp.x,wp.y-40,RES.cattle.color); w.bob=1; } } }
+      if(w.carry.amt>=wcap()){ w.state='unload'; w._cow=null; w.t=0; }
+    } else { if(!w.carry.amt){w.state='load';return;} const bu=st('butcher'); if(moveXY(w,bu.c,bu.r,0.8)){ w.t+=tickDt; if(w.t>=FLOW){ w.t-=FLOW; bu.inbuf.cattle++; w.carry.amt--; /* 生牛輸入無限堆疊、不再因滿而丟棄 */ if(w.carry.amt<=0)w.state='load'; } } }
+    w.bob=Math.max(0,w.bob-tickDt*5); return;
+  }
+  if(w.role==='lumber'){ const tr=S.stations.find(s=>s.type==='source'&&!s.locked);
+    if(w.state==='load'){ if(tr&&moveXY(w,tr.c,tr.r,0.8)){ w.t+=tickDt; if(w.t>=S.gatherInt){ w.t-=S.gatherInt; w.carry.res='wood'; w.carry.amt++; w.bob=1; } }
+      const _bk=st('baker'), _need=_bk&&!_bk.locked&&_bk.inbuf.wood<_bk.inbuf.beef, _send=_need?Math.min(wcap(),10):wcap(); // 烤爐缺木→砍一小批(≤10)就先送、不用砍滿載；不缺則正常裝滿
+      if(w.carry.amt>=_send){ w.state='unload'; w._dest=null; } }
+    else { if(!w.carry.amt){w.state='load'; w._dest=null; return;}
+      if(!w._dest){ const dl=woodDests(); if(dl.length) w._dest=dl[roleIndex(w)%dl.length]; else w._dest=pickDest('wood'); }
+      const u=w._dest; if(!u) return; if(moveXY(w,u.c,u.r,0.8)){
+        if(u.type==='market'){ S.money+=u.price*w.carry.amt; w.carry.amt=0; w.state='load'; w._dest=null; } // 賣木材整車一次賣掉、不逐個卡時間→立刻回去採集
+        else { w.t+=tickDt; if(w.t>=FLOW){ w.t-=FLOW; doUnload(w,u); if(u.type==='frame'&&u.got[w.carry.res]>=u.need[w.carry.res]) w._dest=null; if(w.carry.amt<=0){w.state='load'; w._dest=null;} } } } }
+    w.bob=Math.max(0,w.bob-tickDt*5); return;
+  }
+  // 運輸工：取屠宰台/烤爐成品 → 依需求送（建造框 → 烤爐 → 販售櫃台）
+  const b=st('butcher'),bk=st('baker'),co=st('counter');
+  if(w.state==='load'){ if(w.carry.amt===0){ // 肉店員(clerkB)搬牛肉、糧店員(clerkR)搬口糧；自己那種缺貨時才支援另一種(不閒置)
+      const wantBeef = w.role==='clerkB';
+      if(wantBeef) w.carry.res = b.outbuf>0 ? 'beef' : (bk.outbuf>0 ? 'ration' : null);
+      else         w.carry.res = bk.outbuf>0 ? 'ration' : (b.outbuf>0 ? 'beef' : null); }
+    const src = w.carry.res==='beef'?b : w.carry.res==='ration'?bk : null;
+    if(src){ if(moveXY(w,src.c,src.r,0.8)){ w.t+=tickDt; if(w.t>=FLOW && src.outbuf>0){ w.t-=FLOW; src.outbuf--; w.carry.amt++; } } // 到點逐步拿(每 FLOW 拿 1，回歸原本速率、與卸貨節奏一致)
+      // 裝滿 carryCap 才離開；只有「出料空了且來源缺料做不出更多」才帶半車走(避免產線停擺卡死)
+      let canProd=true; for(const r in src.ins){ if((src.inbuf[r]||0)<src.ins[r]){ canProd=false; break; } }
+      if(w.carry.amt>=wcap() || (w.carry.amt>0 && src.outbuf<=0 && !canProd)) w.state='unload'; }
+    else if(co&&co.cash>0){ if(moveXY(w,co.c,co.r,0.8)){ S.money+=co.cash; co.cash=0; } } }
+  else { if(!w.carry.amt){ w.state='load'; w.carry.res=null; w._dest=null; return; } if(!w._dest) w._dest=pickDest(w.carry.res)||co; const u=w._dest; if(!u) return; if(moveXY(w,u.c,u.r,0.8)){ w.t+=tickDt; if(w.t>=FLOW){ w.t-=FLOW; doUnload(w,u); /* 整車卸在選定目標；只有建造框收滿時才改送剩餘 */ if(u.type==='frame'&&u.got[w.carry.res]>=u.need[w.carry.res]) w._dest=null; if(w.carry.amt<=0){w.state='load';w.carry.res=null;w._dest=null;} } } }
+  w.bob=Math.max(0,w.bob-tickDt*5);
+}
+
+let tickDt=1/60;
+function update(dt){ tickDt=dt;
+  const jx=S.joy.dx,jy=S.joy.dy,mag=Math.hypot(jx,jy);
+  if(S.joy.active&&mag>0.06){ let dc=jx/(TILE_W/2)+jy/(TILE_H/2), dr=jy/(TILE_H/2)-jx/(TILE_W/2); const dl=Math.hypot(dc,dr)||1; S.player.pc=clamp(S.player.pc+dc/dl*S.pMoveSpeed*mag*dt,0,GRID-1); S.player.pr=clamp(S.player.pr+dr/dl*S.pMoveSpeed*mag*dt,0,GRID-1); }
+  S.player.bob=Math.max(0,S.player.bob-dt*5);
+  // 主角一次只跟「最近的一個」站點互動，避免站在收錢點時被旁邊升級台/交付框誤觸吸走資源
+  let best=null,bd=99;
+  for(const s of S.stations){ if(s.locked||s.type==='home') continue; const rng=s.type==='upgrade'?1.3:1.4; const d=Math.hypot(S.player.pc-s.c,S.player.pr-s.r); if(d<=rng&&d<bd){bd=d;best=s;} }
+  if(best) interact(S.player,best);
+  harvestCows(S.player,dt);
+  for(const w of S.workers) updateWorker(w);
+  updateCows(dt);
+  for(const s of S.stations){ if(s.type==='proc') updateProc(s,dt); else if(s.type==='counter') updateCounter(s,dt); }
+  for(let i=S.floats.length-1;i>=0;i--){ const o=S.floats[i]; o.y+=o.vy*dt; o.life-=dt; if(o.life<=0)S.floats.splice(i,1); }
+  for(let i=S.cubes.length-1;i>=0;i--){ const c=S.cubes[i]; c.t+=dt*c.sp; if(c.t>=1)S.cubes.splice(i,1); }
+  for(const f of S.snow){ f.y+=dt*0.05*f.s; if(f.y>1)f.y=0; }
+  S.time+=dt; S.obj=objective();
+  const hb=document.getElementById('hint'); if(S.obj){ hb.textContent=S.obj.msg; hb.style.opacity='1'; } else hb.style.opacity='0';
+  refreshHUD();
+  S.saveT=(S.saveT||0)+dt; if(S.saveT>=2){ S.saveT=0; saveGame(); } // 每 2 秒自動存檔
+}
+
+function drawTile(c,r,locked){ const p=iso(c,r); ctx.beginPath(); ctx.moveTo(p.x,p.y-TILE_H/2); ctx.lineTo(p.x+TILE_W/2,p.y); ctx.lineTo(p.x,p.y+TILE_H/2); ctx.lineTo(p.x-TILE_W/2,p.y); ctx.closePath(); ctx.fillStyle=locked?'#cdd9e0':((c+r)%2?'#dceef6':'#eaf6fb'); ctx.fill(); ctx.strokeStyle='rgba(150,190,210,.35)'; ctx.lineWidth=1; ctx.stroke(); }
+function person(x,y,bob,sc,body,hat,stack,lite){ const lift=bob*4; ctx.fillStyle='rgba(0,0,0,.15)'; ctx.beginPath(); ctx.ellipse(x,y,10*sc,5*sc,0,0,6.28); ctx.fill(); ctx.fillStyle=body; ctx.beginPath(); ctx.roundRect(x-8*sc,y-26*sc-lift,16*sc,22*sc,5*sc); ctx.fill(); ctx.fillStyle='#f0d2b0'; ctx.beginPath(); ctx.arc(x,y-30*sc-lift,7*sc,0,6.28); ctx.fill(); ctx.fillStyle=hat; ctx.beginPath(); ctx.arc(x,y-33*sc-lift,7.5*sc,Math.PI,0); ctx.fill();
+  if(stack&&stack.length){ const n=stack.length, bw=15*sc, bh=6, base=y-39*sc-lift, mx=lite?3:5, max=Math.min(n,mx); // 工人(lite) 最多畫 3、主角 5
+    for(let i=0;i<max;i++){ const by=base-i*(bh+1); ctx.fillStyle=stack[i]; ctx.fillRect(x-bw/2,by-bh,bw,bh); ctx.fillStyle='rgba(255,255,255,.3)'; ctx.fillRect(x-bw/2,by-bh,bw,2); ctx.fillStyle='rgba(0,0,0,.18)'; ctx.fillRect(x-bw/2,by-1,bw,1); }
+    if(!lite && n>5){ ctx.fillStyle='#0b3a52'; ctx.font='800 10px sans-serif'; ctx.textAlign='center'; ctx.fillText('+'+fmt(n-5),x,base-5*(bh+1)-3); } } } // 只有主角顯示「+剩餘數」；工人不顯示(減少 Lv100 數字雜訊)
+function drawCow(x,y){ ctx.fillStyle='rgba(0,0,0,.12)'; ctx.beginPath(); ctx.ellipse(x,y,12,5,0,0,6.28); ctx.fill(); ctx.fillStyle='#f4f8fb'; ctx.beginPath(); ctx.ellipse(x,y-8,13,9,0,0,6.28); ctx.fill(); ctx.fillStyle='#3a3a3a'; ctx.beginPath(); ctx.ellipse(x-5,y-9,3,3,0,0,6.28); ctx.fill(); ctx.beginPath(); ctx.ellipse(x+4,y-6,4,3,0,0,6.28); ctx.fill(); ctx.fillStyle='#f4f8fb'; ctx.beginPath(); ctx.arc(x+11,y-12,5,0,6.28); ctx.fill(); ctx.fillStyle='#e7a0a8'; ctx.beginPath(); ctx.arc(x+13,y-10,2,0,6.28); ctx.fill(); }
+function drawPile(x,baseY,frac,color,mb){ const blocks=Math.round(clamp(frac,0,1)*(mb||6)), bw=18,bh=5; for(let i=0;i<blocks;i++){ const by=baseY-i*(bh+1); ctx.fillStyle=color; ctx.fillRect(x-bw/2,by-bh,bw,bh); ctx.fillStyle='rgba(255,255,255,.3)'; ctx.fillRect(x-bw/2,by-bh,bw,2); ctx.fillStyle='rgba(0,0,0,.15)'; ctx.fillRect(x-bw/2,by-1,bw,1); } }
+function drawBar(x,y,w,frac){ ctx.fillStyle='rgba(0,0,0,.3)'; ctx.fillRect(x-w/2-1,y-1,w+2,6); ctx.fillStyle='#5ed46a'; ctx.fillRect(x-w/2,y,w*clamp(frac,0,1),4); }
+function drawStation(s){ const p=iso(s.c,s.r);
+  if(s.locked && s.type!=='frame'){ ctx.fillStyle='rgba(180,205,220,.5)'; ctx.beginPath(); ctx.ellipse(p.x,p.y,24,13,0,0,6.28); ctx.fill(); ctx.fillStyle='#0b3a52'; ctx.font='800 14px sans-serif'; ctx.textAlign='center'; ctx.fillText('🔒',p.x,p.y-2); return; }
+  if(s.type!=='upgrade'){ ctx.fillStyle='rgba(0,0,0,.12)'; ctx.beginPath(); ctx.ellipse(p.x,p.y+2,22,11,0,0,6.28); ctx.fill(); }
+  if(s.type==='home'){ ctx.fillStyle='#5c3a1e'; ctx.fillRect(p.x-14,p.y-6,28,7); ctx.fillStyle='#7c5326'; ctx.fillRect(p.x-12,p.y-2,24,5);
+    ctx.fillStyle='#f3a23a'; ctx.beginPath(); ctx.moveTo(p.x,p.y-30); ctx.quadraticCurveTo(p.x-9,p.y-12,p.x,p.y-8); ctx.quadraticCurveTo(p.x+9,p.y-12,p.x,p.y-30); ctx.fill(); ctx.fillStyle='#ffd66b'; ctx.beginPath(); ctx.moveTo(p.x,p.y-22); ctx.quadraticCurveTo(p.x-4,p.y-13,p.x,p.y-9); ctx.quadraticCurveTo(p.x+4,p.y-13,p.x,p.y-22); ctx.fill();
+    ctx.fillStyle='#0b3a52'; ctx.font='700 10px sans-serif'; ctx.textAlign='center'; ctx.fillText('營火',p.x,p.y+16); }
+  else if(s.type==='source'){ ctx.fillStyle='#7c4a26'; ctx.fillRect(p.x-6,p.y-42,12,42); ctx.fillStyle='#2f7d4f'; ctx.beginPath(); ctx.arc(p.x,p.y-48,19,0,6.28); ctx.fill(); ctx.fillStyle='#0b3a52'; ctx.font='700 10px sans-serif'; ctx.textAlign='center'; ctx.fillText('木材',p.x,p.y+16); }
+  else if(s.type==='proc'){ ctx.fillStyle=s.id==='butcher'?'#8a5a3a':'#9a6a30'; ctx.fillRect(p.x-22,p.y-24,44,26); ctx.fillStyle='rgba(255,255,255,.2)'; ctx.fillRect(p.x-22,p.y-24,44,6); ctx.strokeStyle='#5c3a1e'; ctx.lineWidth=2; ctx.strokeRect(p.x-22,p.y-24,44,26); ctx.fillStyle='#fff'; ctx.font='700 11px sans-serif'; ctx.textAlign='center'; ctx.fillText(s.id==='butcher'?'屠宰台':'烤爐',p.x,p.y+14); ctx.fillStyle=RES[s.out].color; ctx.font='800 11px sans-serif'; ctx.fillText('→'+RES[s.out].name[0]+fmt(s.outbuf),p.x,p.y-30); let it='',lack=false; for(const r in s.inbuf){ it+=RES[r].name[0]+fmt(s.inbuf[r])+' '; if(s.inbuf[r]<s.ins[r]) lack=true; } ctx.fillStyle=lack?'#d33':'rgba(11,58,82,.8)'; ctx.font='700 9px sans-serif'; ctx.fillText(it,p.x,p.y+1);
+    if(lack){ const miss=Object.keys(s.inbuf).filter(r=>s.inbuf[r]<s.ins[r]).map(r=>RES[r].name).join('+'); ctx.fillStyle='#d33'; ctx.font='800 9px sans-serif'; ctx.fillText('⚠缺'+miss,p.x,p.y+25); } }
+  else if(s.type==='counter'){ ctx.fillStyle='#3f6db0'; ctx.fillRect(p.x-24,p.y-20,48,22); ctx.fillStyle='#fff'; ctx.font='700 11px sans-serif'; ctx.textAlign='center'; ctx.fillText('販售櫃台',p.x,p.y+13); ctx.fillStyle='rgba(11,58,82,.85)'; ctx.font='700 9px sans-serif'; ctx.fillText('肉'+fmt(s.stock.beef)+' 糧'+fmt(s.stock.ration),p.x,p.y-26); { const _m=(S.priceMul||1); ctx.fillStyle='#2f9d43'; ctx.font='800 10px sans-serif'; ctx.fillText('肉$'+fmt(Math.round(PRICE.beef*_m))+' 糧$'+fmt(Math.round(PRICE.ration*_m)),p.x,p.y+25); } if(s.cash>0){ drawPile(p.x,p.y-26,clamp(s.cash/50,0,1),'#f3c34a',6); ctx.fillStyle='#f3c34a'; ctx.font='800 12px sans-serif'; ctx.fillText('$'+fmt(s.cash),p.x,p.y-62); } const QN=Math.min(s.queue.length,8); for(let i=0;i<QN;i++){ const q=iso(s.c-1.0-i*0.8,s.r); person(q.x,q.y,0,0.55,'#7d8b99','#48586a'); const cu=s.queue[i]; ctx.fillStyle=RES[cu.want].color; ctx.beginPath(); ctx.arc(q.x,q.y-28,6,0,6.28); ctx.fill(); ctx.fillStyle='#fff'; ctx.font='800 8px sans-serif'; ctx.textAlign='center'; ctx.fillText(fmt(cu.qty),q.x,q.y-25); } if(s.queue.length>QN){ const q=iso(s.c-1.0-QN*0.8,s.r); ctx.fillStyle='#0b3a52'; ctx.font='800 10px sans-serif'; ctx.textAlign='center'; ctx.fillText('+'+fmt(s.queue.length-QN),q.x,q.y-24); } }
+  else if(s.type==='market'){ ctx.fillStyle='#6a8a4a'; ctx.fillRect(p.x-24,p.y-20,48,22); ctx.fillStyle='#8aaa5a'; ctx.fillRect(p.x-24,p.y-20,48,6); ctx.strokeStyle='#46602e'; ctx.lineWidth=2; ctx.strokeRect(p.x-24,p.y-20,48,22); ctx.fillStyle='#fff'; ctx.font='700 11px sans-serif'; ctx.textAlign='center'; ctx.fillText('賣'+RES[s.accept].name,p.x,p.y+13); ctx.fillStyle='#f3c34a'; ctx.font='800 11px sans-serif'; ctx.fillText('$'+fmt(s.price)+'/個',p.x,p.y-26); }
+  else if(s.type==='frame'){ const r=Object.keys(s.need)[0], frac=s.got[r]/s.need[r];
+    ctx.fillStyle='rgba(243,195,74,.25)'; ctx.beginPath(); ctx.ellipse(p.x,p.y,26,14,0,0,6.28); ctx.fill();
+    ctx.strokeStyle='#caa050'; ctx.lineWidth=3; ctx.setLineDash([6,4]); ctx.strokeRect(p.x-20,p.y-30,40,32); ctx.setLineDash([]);
+    drawPile(p.x,p.y-2,frac,RES[r].color,6);
+    ctx.fillStyle='#0b3a52'; ctx.font='800 11px sans-serif'; ctx.textAlign='center'; ctx.fillText('🔨建造',p.x,p.y-42);
+    ctx.fillStyle=RES[r].color; ctx.font='800 10px sans-serif'; ctx.fillText(RES[r].name+' '+s.got[r]+'/'+s.need[r],p.x,p.y+16);
+    drawBar(p.x,p.y+21,42,frac); }
+  else if(s.type==='upgrade'){ const frac=s.acc/s.cost;
+    ctx.fillStyle='rgba(243,195,74,.18)'; ctx.beginPath(); ctx.ellipse(p.x,p.y,21,11,0,0,6.28); ctx.fill();
+    drawPile(p.x,p.y-24,frac,'#f3c34a',3);
+    ctx.fillStyle='#2f9d43'; ctx.beginPath(); ctx.roundRect(p.x-24,p.y-1,48,15,5); ctx.fill(); ctx.strokeStyle='rgba(255,255,255,.5)'; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.fillStyle='#fff'; ctx.font='800 10px sans-serif'; ctx.textAlign='center'; ctx.fillText('⬆'+s.label,p.x,p.y+9);
+    ctx.fillStyle='#0b3a52'; ctx.font='800 9px sans-serif'; ctx.fillText('Lv'+(s.lvl||1)+' '+fmt(Math.floor(s.acc))+'/'+fmt(s.cost),p.x,p.y-14);
+    drawBar(p.x,p.y+18,46,frac); }
+}
+function draw(){ if(!S.__spread && W>=200){ S.__spread=true; spreadStations(); } ctx.clearRect(0,0,W,H);
+  for(let su=0;su<=2*(GRID-1);su++) for(let c=0;c<GRID;c++){ const r=su-c; if(r>=0&&r<GRID) drawTile(c,r,false); }
+  const objs=[];
+  for(const s of S.stations){ if(s.locked) continue; objs.push({d:s.c+s.r-(s.type==='upgrade'?0.2:0.1), f:()=>drawStation(s)}); }
+  // 當前目標光環＋箭頭
+  if(S.obj&&S.obj.t&&!S.obj.t.locked){ const tp=iso(S.obj.t.c,S.obj.t.r), pul=1+0.14*Math.sin(S.time*5);
+    objs.push({d:99, f:()=>{ ctx.strokeStyle='rgba(243,195,74,.95)'; ctx.lineWidth=3.5; ctx.beginPath(); ctx.ellipse(tp.x,tp.y,28*pul,15*pul,0,0,6.28); ctx.stroke();
+      ctx.fillStyle='#f3c34a'; ctx.font='800 24px sans-serif'; ctx.textAlign='center'; ctx.fillText('▼',tp.x,tp.y-56-5*Math.sin(S.time*5)); }}); }
+  for(const k of S.cows){ const p=iso(k.pc,k.pr); objs.push({d:k.pc+k.pr, f:()=>drawCow(p.x,p.y)}); }
+  for(const w of S.workers){ const p=iso(w.pc,w.pr); const col=w.role==='lumber'?'#5b7d4a':w.role==='rancher'?'#7a5a3a':w.role==='clerkB'?'#9c6b6b':w.role==='clerkR'?'#9c8a5b':'#6b6f9c'; const sk=carryStack(w.carry); objs.push({d:w.pc+w.pr, f:()=>person(p.x,p.y,w.bob,0.78,col,'#3a4a59',sk,true)}); } // 工人 lite 繪製(少方塊、無+N)
+  let _maxW=-Infinity; for(const w of S.workers){ const d=w.pc+w.pr; if(d>_maxW)_maxW=d; } // 主角 z-index 永遠在所有工人之上
+  const _pd=Math.max(S.player.pc+S.player.pr, _maxW+0.01);
+  objs.push({d:_pd, f:()=>{ const p=iso(S.player.pc,S.player.pr); ctx.strokeStyle='rgba(40,120,220,.6)'; ctx.lineWidth=2.5; ctx.beginPath(); ctx.ellipse(p.x,p.y,14,7,0,0,6.28); ctx.stroke(); person(p.x,p.y,S.player.bob,1,'#2f6db0','#21456e',bagStack(S.player.bag)); }});
+  objs.sort((a,b)=>a.d-b.d).forEach(o=>o.f());
+  for(const c of S.cubes){ const x=c.x+(c.tx-c.x)*c.t, y=c.y+(c.ty-c.y)*c.t-Math.sin(c.t*Math.PI)*28; ctx.fillStyle=c.color; ctx.fillRect(x-5,y-5,10,10); ctx.fillStyle='rgba(255,255,255,.35)'; ctx.fillRect(x-5,y-5,10,3); }
+  for(const o of S.floats){ ctx.globalAlpha=clamp(o.life*1.4,0,1); ctx.fillStyle=o.color; ctx.font=(o.big?'800 17px':'800 12px')+' sans-serif'; ctx.textAlign='center'; ctx.strokeStyle='rgba(0,0,0,.35)'; ctx.lineWidth=3; ctx.strokeText(o.text,o.x,o.y); ctx.fillText(o.text,o.x,o.y); ctx.globalAlpha=1; }
+  ctx.fillStyle='rgba(255,255,255,.85)'; for(const f of S.snow){ ctx.globalAlpha=.5*f.s; ctx.beginPath(); ctx.arc(f.x*W,f.y*H,f.s*1.5,0,6.28); ctx.fill(); } ctx.globalAlpha=1;
+  if(S.joy.active){ const R=44; ctx.fillStyle='rgba(255,255,255,.3)'; ctx.beginPath(); ctx.arc(S.joy.ox,S.joy.oy,R,0,6.28); ctx.fill(); ctx.fillStyle='rgba(40,90,140,.85)'; ctx.beginPath(); ctx.arc(S.joy.ox+S.joy.dx*R,S.joy.oy+S.joy.dy*R,18,0,6.28); ctx.fill(); }
+}
+
+const elMoney=document.getElementById('money'), elBag=document.getElementById('bag');
+function refreshHUD(){ elMoney.textContent=fmt(S.money); let h=''; for(const k of ['wood','cattle','beef','ration']){ if(S.player.bag[k]>0) h+=`<div class="bagItem"><span class="dot" style="width:11px;height:11px;background:${RES[k].color}"></span>${fmt(S.player.bag[k])}</div>`; } h+=`<div class="bagItem" style="opacity:.7">每種上限 ${fmt(S.carryCap)}</div>`; elBag.innerHTML=h; }
+function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.style.opacity=1; clearTimeout(toast._t); toast._t=setTimeout(()=>t.style.opacity=0,1400); }
+
+const hint=document.getElementById('hint');
+function cvXY(e){ const r=cv.getBoundingClientRect(); return [(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*H/r.height]; }
+function jStart(x,y){ S.started=true; S.joy.active=true; S.joy.ox=x; S.joy.oy=y; S.joy.dx=0; S.joy.dy=0; }
+function jMove(x,y){ if(!S.joy.active)return; const dx=x-S.joy.ox,dy=y-S.joy.oy,len=Math.hypot(dx,dy),max=44; if(len<.001){S.joy.dx=0;S.joy.dy=0;return;} const cl=Math.min(len,max)/max; S.joy.dx=dx/len*cl; S.joy.dy=dy/len*cl; }
+function jEnd(){ S.joy.active=false; S.joy.dx=0; S.joy.dy=0; }
+cv.addEventListener('pointerdown',e=>{e.preventDefault(); const p=cvXY(e); jStart(p[0],p[1]);});
+cv.addEventListener('pointermove',e=>{const p=cvXY(e); jMove(p[0],p[1]);});
+addEventListener('pointerup',jEnd); addEventListener('pointercancel',jEnd);
+document.getElementById('cta').onclick=()=>toast('（廣告）導向商店下載…');
+document.getElementById('close').onclick=()=>toast('（廣告）關閉鈕');
+
+// ===== 自動存檔 / 讀檔 / 重置 =====
+const SAVE_KEY='whiteout_save_v1';
+let resetting=false; // 重置進行中就不再存檔（否則 reload 觸發的 visibilitychange 會把舊進度又存回去）
+function saveGame(){ if(resetting) return; try{
+  // 只存「升級等級 + 遊戲進度」；所有會因等級變動的數值(carryCap/採速/移速/加工/招客效果/各站cap/賣木材價/工人數…)
+  // 都不存，讀檔時用 recomputeStats 從等級換算回來。
+  const data={ v:3, money:S.money, cowsN:S.cows.length,
+    stations:S.stations.map(s=>{ const o={id:s.id, locked:s.locked};
+      if(s.type==='frame') o.got=Object.assign({},s.got);
+      if(s.type==='upgrade'){ o.lvl=s.lvl||0; o.acc=s.acc; }       // ← 等級 + 本級充能進度
+      if(s.type==='proc'){ o.inbuf=Object.assign({},s.inbuf); o.outbuf=s.outbuf; }  // 庫存(非等級衍生)
+      if(s.type==='counter'){ o.cash=s.cash; o.stock=Object.assign({},s.stock); }   // 現金+成品庫存
+      return o; }) };
+  localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+}catch(e){} }
+function loadGame(){ try{
+  const raw=localStorage.getItem(SAVE_KEY); if(!raw) return false;
+  const d=JSON.parse(raw); if(!d||d.v!==3) return false;
+  if(typeof d.money==='number') S.money=d.money;
+  if(Array.isArray(d.stations)) for(const so of d.stations){ const s=st(so.id); if(!s) continue;
+    s.locked=so.locked;
+    if(so.got&&s.got) for(const k in s.got){ if(k in so.got) s.got[k]=so.got[k]; }
+    if(so.lvl!=null) s.lvl=so.lvl; if(so.acc!=null) s.acc=so.acc;        // ← 升級等級 + 充能進度
+    if(so.inbuf&&s.inbuf) for(const k in s.inbuf){ if(k in so.inbuf) s.inbuf[k]=so.inbuf[k]; }
+    if(so.outbuf!=null) s.outbuf=so.outbuf;
+    if(so.cash!=null) s.cash=so.cash;
+    if(so.stock&&s.stock) for(const k in s.stock){ if(k in so.stock) s.stock[k]=so.stock[k]; }
+  }
+  const _uc=st('up_clerk'),_uc2=st('up_clerk2'); if(_uc&&_uc2&&!_uc.locked&&_uc2.locked) _uc2.locked=false; // 舊存檔相容：肉店員台已解鎖則糧店員台也解鎖
+  if(d.cowsN>0) scatterCows(d.cowsN);
+  recomputeStats();   // 依還原的等級，用公式換算所有衍生數值(含各站cap/成本、招出對應數量的工人)
+  S.started=true;
+  return true;
+}catch(e){ return false; } }
+document.getElementById('reset').onclick=()=>{ if(confirm('確定要重置所有遊戲進度嗎？此動作無法復原。')){ resetting=true; try{ localStorage.removeItem(SAVE_KEY); }catch(e){} location.reload(); } };
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) saveGame(); });
+
+let last=performance.now(),acc=0; const STEP=1/60;
+function frame(now){ let dt=(now-last)/1000; last=now; dt=clamp(dt,0,0.1); acc+=dt; while(acc>=STEP){ update(STEP); acc-=STEP; } draw(); requestAnimationFrame(frame); }
+loadGame(); resize(); refreshHUD(); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
