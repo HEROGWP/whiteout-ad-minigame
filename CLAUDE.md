@@ -104,9 +104,10 @@ drift — search by name):
    (frame unlock chain, selling, upgrades). There's no test suite to run.
 4. **Keep the docs in sync:** update `GAMEPLAY_SPEC.md` §0 (as-built) and
    `經濟與單位定義.md` to reflect new numbers/behaviour. These files explicitly
-   claim to mirror the shipped `index.html`. Note: the docs currently describe
-   the save version as `v1/v2` in prose while the code uses `v:3` — trust the
-   code and prefer fixing such drift when you touch related areas.
+   claim to mirror the shipped `index.html`. When code and docs drift, trust the
+   code and fix the docs. (Example already reconciled: the save payload version
+   is `v:3` in code — `loadGame()` checks `d.v!==3` — while the `localStorage`
+   key name is the unrelated literal `whiteout_save_v1`.)
 5. Comments and docs are in **Traditional Chinese**; match that style. UI strings
    are Traditional Chinese.
 
